@@ -1,0 +1,139 @@
+services:
+  nameserver:
+    build: .
+    container_name: nameserver
+    command: uv run python -m Pyro5.nameserver --host 0.0.0.0 --port 9090
+    ports:
+      - "9090:9090"
+    networks:
+      - raft-net
+    healthcheck:
+      test:
+        - "CMD"
+        - "uv"
+        - "run"
+        - "python"
+        - "-c"
+        - "import Pyro5.api; Pyro5.api.locate_ns(host='nameserver', port=9090);
+          print('ok')"
+      interval: 3s
+      timeout: 5s
+      retries: 15
+      start_period: 5s
+
+  # ---------------------------------------------------------------------------
+  # Nós Raft (4 seguidores na inicialização)
+  # Cada nó recebe NODE_NAME via env para saber qual URI/porta usar.
+  # depends_on + healthcheck garante que o nameserver esteja pronto primeiro.
+  # ---------------------------------------------------------------------------
+  node_1:
+    build: .
+    container_name: node_1
+    hostname: node_1
+    environment:
+      - NODE_NAME=node_1
+      - PYRO_SERIALIZER=serpent
+    ports:
+      - "9001:9001"
+    depends_on:
+      nameserver:
+        condition: service_healthy
+    networks:
+      - raft-net
+
+  node_2:
+    build: .
+    container_name: node_2
+    hostname: node_2
+    environment:
+      - NODE_NAME=node_2
+      - PYRO_SERIALIZER=serpent
+    ports:
+      - "9002:9002"
+    depends_on:
+      nameserver:
+        condition: service_healthy
+    networks:
+      - raft-net
+
+  node_3:
+    build: .
+    container_name: node_3
+    hostname: node_3
+    environment:
+      - NODE_NAME=node_3
+      - PYRO_SERIALIZER=serpent
+    ports:
+      - "9003:9003"
+    depends_on:
+      nameserver:
+        condition: service_healthy
+    networks:
+      - raft-net
+
+  node_4:
+    build: .
+    container_name: node_4
+    hostname: node_4
+    environment:
+      - NODE_NAME=node_4
+      - PYRO_SERIALIZER=serpent
+    ports:
+      - "9004:9004"
+    depends_on:
+      nameserver:
+        condition: service_healthy
+    networks:
+      - raft-net
+
+  node_5:
+    build: .
+    container_name: node_5
+    hostname: node_5
+    environment:
+      - NODE_NAME=node_5
+      - PYRO_SERIALIZER=serpent
+    ports:
+      - "9005:9005"
+    depends_on:
+      nameserver:
+        condition: service_healthy
+    networks:
+      - raft-net
+
+  node_6:
+    build: .
+    container_name: node_6
+    hostname: node_6
+    environment:
+      - NODE_NAME=node_6
+      - PYRO_SERIALIZER=serpent
+    ports:
+      - "9006:9006"
+    depends_on:
+      nameserver:
+        condition: service_healthy
+    networks:
+      - raft-net
+
+  # ---------------------------------------------------------------------------
+  # Cliente REPL — envia comandos ao líder do cluster
+  # Uso: docker attach client
+  # ---------------------------------------------------------------------------
+  client:
+    build: .
+    container_name: client
+    command: uv run python -m src.client.init_client
+    environment:
+      - PYRO_SERIALIZER=serpent
+    depends_on:
+      nameserver:
+        condition: service_healthy
+    networks:
+      - raft-net
+    stdin_open: true
+    tty: true
+
+networks:
+  raft-net:
+    driver: bridge
