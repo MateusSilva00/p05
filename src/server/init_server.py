@@ -2,11 +2,7 @@ import os
 
 from src.server.server import RaftServer
 
-
-def main() -> None:
-    node_name = os.getenv("NODE_NAME", "unknown_node")
-    RaftServer(node_name).start()
-
-
 if __name__ == "__main__":
-    main()
+    node_name = os.environ.get("NODE_NAME", "node_1")
+    server = RaftServer(node_name)
+    server.start()

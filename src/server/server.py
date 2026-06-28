@@ -1,106 +1,139 @@
 import threading
 import time
+from concurrent import futures
 
-import Pyro5.api
-import Pyro5.errors
+import grpc
 
-from src.core.config import (
-    LEADER_NS_NAME,
-    NAMESERVER_HOST,
-    NAMESERVER_PORT,
-    NODE_OBJECT_IDS,
-    NODE_PORTS,
-    NODE_URIS,
-)
+from src.core.config import GRPC_PORT
 from src.core.logging import logger
-from src.core.models import NodeState, RaftNode
+from src.core.models import LogEntry, NodeRole
+from src.generated import raft_pb2, raft_pb2_grpc
 from src.server.election import ElectionManager
-from src.server.heartbeat import HeartbeatManager
-from src.server.proxy import RaftNodeProxy
+from src.server.raft_node import RaftNode
+from src.server.replication import ReplicationManager
+
+
+# ── gRPC Servicers ──────────────────────────────────────────────────
+
+
+class RaftServiceServicer(raft_pb2_grpc.RaftServiceServicer):
+    def __init__(self, node: RaftNode) -> None:
+        self._node = node
+
+    def RequestVote(self, request, context):  # noqa: N802
+        with self._node.lock:
+            term, granted = self._node.handle_vote_request(
+                request.candidate_id,
+                request.term,
+                request.last_log_index,
+                request.last_log_term,
+            )
+        return raft_pb2.VoteResponse(term=term, vote_granted=granted)
+
+    def AppendEntries(self, request, context):  # noqa: N802
+        entries = [
+            LogEntry(term=e.term, index=e.index, command=e.command)
+            for e in request.entries
+        ]
+        with self._node.lock:
+            term, success, conflict_index = self._node.handle_append_entries(
+                request.leader_id,
+                request.term,
+                request.prev_log_index,
+                request.prev_log_term,
+                entries,
+                request.leader_commit,
+            )
+        return raft_pb2.AppendEntriesResponse(
+            term=term, success=success, conflict_index=conflict_index
+        )
+
+
+class KVServiceServicer(raft_pb2_grpc.KVServiceServicer):
+    def __init__(self, node: RaftNode, replication: ReplicationManager) -> None:
+        self._node = node
+        self._replication = replication
+
+    def Publish(self, request, context):  # noqa: N802
+        with self._node.lock:
+            if self._node.role != NodeRole.LEADER:
+                return raft_pb2.PublishResponse(
+                    success=False,
+                    leader_id=self._node.leader_id or "",
+                    error="not_leader",
+                )
+            entry = self._node.append_command(request.data)
+
+        self._replication.replicate()
+
+        with self._node.lock:
+            if self._node.volatile.commit_index >= entry.index:
+                return raft_pb2.PublishResponse(success=True)
+            return raft_pb2.PublishResponse(success=False, error="no_quorum")
+
+    def Consume(self, request, context):  # noqa: N802
+        with self._node.lock:
+            entries = self._node.committed_entries()
+            return raft_pb2.ConsumeResponse(
+                success=True,
+                data=[e.command for e in entries],
+                leader_id=self._node.leader_id or "",
+            )
+
+
+# ── Server Orchestrator ─────────────────────────────────────────────
 
 
 class RaftServer:
-    """
-    Orquestra o ciclo de vida completo do nó Raft:
-      - Registra o proxy Pyro5 no daemon
-      - Mantém o tick loop de election timeout
-      - Delega o protocolo de eleição ao ElectionManager
-      - Registra a liderança no nameserver ao vencer
-    """
-
-    _TICK_INTERVAL: float = 0.2  # segundos entre cada verificação
-    _STARTUP_DELAY: float = 5.0  # espera inicial antes do tick loop
+    _TICK_INTERVAL: float = 0.1
+    _STARTUP_DELAY: float = 3.0
 
     def __init__(self, node_name: str) -> None:
-        self._node_name = node_name
-        node = RaftNode(node_name=node_name)
-        self._proxy = RaftNodeProxy(node=node)
-        self._election = ElectionManager(self._proxy)
-        self._heartbeat = HeartbeatManager(self._proxy)
+        self._node = RaftNode(node_name)
+        self._election = ElectionManager(self._node)
+        self._replication = ReplicationManager(self._node)
 
     def start(self) -> None:
-        """Inicializa o daemon Pyro5, inicia o tick loop e entra no request loop."""
-        daemon = self._create_daemon()
+        grpc_server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
+
+        raft_pb2_grpc.add_RaftServiceServicer_to_server(
+            RaftServiceServicer(self._node), grpc_server
+        )
+        raft_pb2_grpc.add_KVServiceServicer_to_server(
+            KVServiceServicer(self._node, self._replication), grpc_server
+        )
+
+        grpc_server.add_insecure_port(f"0.0.0.0:{GRPC_PORT}")
+        grpc_server.start()
+
+        logger.success(f"[{self._node.node_name}] gRPC server on port {GRPC_PORT}")
 
         tick = threading.Thread(target=self._tick_loop, daemon=True)
         tick.start()
 
-        logger.info(f"[{self._node_name}] aguardando requisições...")
-        daemon.requestLoop()
-
-    def _create_daemon(self) -> Pyro5.api.Daemon:
-        port = NODE_PORTS[self._node_name]
-        object_id = NODE_OBJECT_IDS[self._node_name]
-
-        daemon = Pyro5.api.Daemon(host="0.0.0.0", port=port)
-        uri = daemon.register(self._proxy, objectId=object_id)
-
-        logger.success(f"[{self._node_name}] registrado com URI: {uri}")
-        logger.info(f"[{self._node_name}] estado inicial:\n{self._proxy.node}")
-        return daemon
+        grpc_server.wait_for_termination()
 
     def _tick_loop(self) -> None:
-        """Verifica periodicamente se o election timeout expirou."""
-        logger.info(f"[{self._node_name}] aguardando inicializacao do sistema...")
         time.sleep(self._STARTUP_DELAY)
-        logger.info(f"[{self._node_name}] tick loop iniciado")
+        logger.info(f"[{self._node.node_name}] tick loop started")
 
         while True:
             time.sleep(self._TICK_INTERVAL)
-            self._check_election_timeout()
-            self._check_heartbeat_timeout()
+            self._check_election()
+            self._check_heartbeat()
 
-    def _check_election_timeout(self) -> None:
-        """Dispara eleição se o timeout tiver expirado num estado elegível."""
-        with self._proxy.lock:
-            state = self._proxy.node.state
-            is_expired = self._proxy.node.is_election_expired
+    def _check_election(self) -> None:
+        with self._node.lock:
+            role = self._node.role
+            expired = self._node.is_election_expired
 
-        if state in (NodeState.Follower, NodeState.Candidate) and is_expired:
-            won = self._election.run()
-            if won:
-                self._register_as_leader()
+        if role in (NodeRole.FOLLOWER, NodeRole.CANDIDATE) and expired:
+            self._election.run()
 
-    def _check_heartbeat_timeout(self) -> None:
-        """Se o nó é líder e o heartbeat expirou, envia heartbeats aos peers."""
-        with self._proxy.lock:
-            state = self._proxy.node.state
-            is_expired = self._proxy.node.is_heartbeat_expired
+    def _check_heartbeat(self) -> None:
+        with self._node.lock:
+            role = self._node.role
+            expired = self._node.is_heartbeat_expired
 
-        if state == NodeState.Leader and is_expired:
-            self._heartbeat.run()
-
-    def _register_as_leader(self) -> None:
-        """Registra este nó como líder ativo no nameserver Pyro5."""
-        try:
-            ns = Pyro5.api.locate_ns(host=NAMESERVER_HOST, port=NAMESERVER_PORT)
-            leader_uri = NODE_URIS[self._node_name]
-            ns.register(LEADER_NS_NAME, leader_uri)
-            logger.success(
-                f"[{self._node_name}] registrado como líder no nameserver: "
-                f"{LEADER_NS_NAME} → {leader_uri}"
-            )
-        except Exception as e:
-            logger.error(
-                f"[{self._node_name}] falha ao registrar líder no nameserver: {e}"
-            )
+        if role == NodeRole.LEADER and expired:
+            self._replication.replicate()
