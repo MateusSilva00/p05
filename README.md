@@ -1,62 +1,62 @@
-# ⚔️ Coliseum — Raft Consensus with gRPC
+# Raft Consensus com gRPC
 
-Implementation of the **Raft** consensus algorithm for replicated log across **4 distributed nodes**, using **gRPC + Protocol Buffers** for communication and a **Go client** for interoperability.
+Implementação do algoritmo de consenso **Raft** para replicação de log entre **4 nós distribuídos**, utilizando **gRPC + Protocol Buffers** para comunicação e um **cliente Go** para demonstrar interoperabilidade.
 
-## 📐 Architecture
+## Arquitetura
 
-- **4 Raft Nodes** (Python) — Each starts as Follower and participates in leader election and log replication via gRPC.
-- **Go Client** — REPL that discovers the leader through node responses and publishes/consumes data.
+- **4 Nós Raft** (Python) — Cada nó inicia como Follower e participa do protocolo de eleição de líder e replicação de log via gRPC.
+- **Cliente Go** — REPL que descobre o líder através das respostas dos nós e publica/some dados.
 
-## 🛠️ Technologies
+## Tecnologias
 
-- **Python 3.12** — Raft servers
-- **Go** — Client (demonstrating gRPC interoperability)
-- **gRPC + Protocol Buffers** — All communication
-- **Pydantic v2** — Domain models and validation
-- **Loguru** — Structured logging
-- **uv** — Python package manager
-- **Docker / Docker Compose** — Container orchestration
+- **Python 3.12** — Servidores Raft
+- **Go** — Cliente (demonstrando interoperabilidade do gRPC)
+- **gRPC + Protocol Buffers** — Toda a comunicação
+- **Pydantic v2** — Modelagem de domínio e validação
+- **Loguru** — Logging estruturado
+- **uv** — Gerenciador de pacotes Python
+- **Docker / Docker Compose** — Orquestração de containers
 
-## 🚀 How to Run
+## Como Executar
 
-### Prerequisites
+### Pré-requisitos
 
-- [Docker](https://www.docker.com/) and [Docker Compose](https://docs.docker.com/compose/)
+- Docker e Docker Compose
 
-### Start the cluster
+### Iniciar o cluster
 
 ```bash
 ./run.sh
 ```
 
-This starts:
-1. **4 Raft nodes** on internal port `50051` each
-2. **Go client** container (interactive)
+Isso inicializa:
+1. **4 nós Raft** na porta interna `50051` cada
+2. **Container do cliente Go** (interativo)
 
-### Use the client
+### Usar o cliente
 
 ```bash
 docker attach client
 ```
 
-Commands:
-- `publish <data>` — Write data to the cluster
-- `consume` — Read all committed data
-- `exit` — Quit
+Comandos:
+- `publish <data>` — Escreve dados no cluster
+- `consume` — Lê todos os dados efetivados (committed)
+- `exit` — Sair
 
-### Demo scenarios
+### Cenários de demonstração
 
 ```bash
-# Scenario 2 — Leader failure
-docker stop node_X    # (replace X with the leader)
+# Cenário 2 — Falha do Líder
+docker stop node_X    # (substitua X pelo líder)
 
-# Scenario 3/4 — Persistence and recovery
+# Cenário 3/4 — Persistência e recuperação
 docker stop node_X
 docker start node_X
 
-# Stop everything
+# Parar tudo
 docker compose down
 
-# Stop and delete persisted data
+# Parar e excluir dados persistidos
 docker compose down --volumes
 ```
