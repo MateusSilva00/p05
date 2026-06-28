@@ -1,97 +1,85 @@
 import threading
-from typing import Dict
 
-import Pyro5.api
-import Pyro5.errors
+import grpc
 
-from src.core.config import NODE_URIS
+from src.core.config import CLUSTER_SIZE, MAJORITY, PEER_ADDRESSES
 from src.core.logging import logger
-from src.core.models import NodeState
-from src.server.proxy import RaftNodeProxy
-
-_TOTAL_NODES = len(NODE_URIS)
-_MAJORITY = (_TOTAL_NODES // 2) + 1
+from src.core.models import NodeRole
+from src.generated import raft_pb2, raft_pb2_grpc
+from src.server.raft_node import RaftNode
 
 
 class ElectionManager:
-    """
-    Encapsula o protocolo de eleição Raft.
-
-    Responsabilidade única: conduzir uma rodada de eleição completa,
-    desde tornar-se candidato até contabilizar os votos.
-    A decisão do que fazer após a vitória (ex.: registro no nameserver)
-    fica a cargo do chamador.
-    """
-
-    def __init__(self, proxy: RaftNodeProxy) -> None:
-        self._proxy = proxy
-
-    @property
-    def _node_name(self) -> str:
-        return self._proxy.node.node_name
+    def __init__(self, node: RaftNode) -> None:
+        self._node = node
 
     def run(self) -> bool:
-        """
-        Conduz uma eleição completa.
+        with self._node.lock:
+            self._node.become_candidate()
+            term = self._node.persistent.current_term
+            last_log_index = self._node.persistent.last_log_index
+            last_log_term = self._node.persistent.last_log_term
 
-        Retorna True se o nó ganhou (tornou-se líder), False caso contrário.
-        """
-        with self._proxy.lock:
-            self._proxy.node.become_candidate()
-            current_term = self._proxy.node.term
+        votes = self._collect_votes(term, last_log_index, last_log_term)
 
-        logger.info(
-            f"[{self._node_name}] solicitando votos dos peers para o termo {current_term}..."
-        )
+        with self._node.lock:
+            if (
+                self._node.role != NodeRole.CANDIDATE
+                or self._node.persistent.current_term != term
+            ):
+                return False
 
-        votes = self._collect_votes(current_term)
-        return self._conclude(votes, current_term)
+            if votes >= MAJORITY:
+                self._node.become_leader()
+                return True
 
-    def _collect_votes(self, current_term: int) -> int:
-        """Solicita votos de todos os peers em paralelo."""
+            logger.warning(
+                f"[{self._node.node_name}] election failed | "
+                f"votes={votes}/{CLUSTER_SIZE} (need {MAJORITY})"
+            )
+            return False
+
+    def _collect_votes(self, term: int, last_log_index: int, last_log_term: int) -> int:
         votes = 1
         votes_lock = threading.Lock()
 
-        def request_from(peer_name: str, peer_uri: str) -> None:
+        def request_from(peer_name: str) -> None:
             nonlocal votes
             try:
-                with Pyro5.api.Proxy(peer_uri) as peer:
-                    peer._pyroTimeout = 3
-                    # pyrefly: ignore [bad-assignment]
-                    response: Dict = peer.request_vote(self._node_name, current_term)
+                addr = PEER_ADDRESSES[peer_name]
+                with grpc.insecure_channel(addr) as channel:
+                    stub = raft_pb2_grpc.RaftServiceStub(channel)
+                    response = stub.RequestVote(
+                        raft_pb2.VoteRequest(
+                            term=term,
+                            candidate_id=self._node.node_name,
+                            last_log_index=last_log_index,
+                            last_log_term=last_log_term,
+                        ),
+                        timeout=3,
+                    )
 
-                peer_term = response["term"]
-                vote_granted = response["vote_granted"]
+                with self._node.lock:
+                    if response.term > self._node.persistent.current_term:
+                        self._node.become_follower(response.term)
+                        return
 
-                if self._detect_higher_term(peer_name, peer_term):
-                    return
-
-                if vote_granted:
+                if response.vote_granted:
                     with votes_lock:
                         votes += 1
                     logger.info(
-                        f"[{self._node_name}] recebeu voto de {peer_name} | "
-                        f"total={votes}/{_TOTAL_NODES}"
+                        f"[{self._node.node_name}] got vote from {peer_name} | "
+                        f"total={votes}/{CLUSTER_SIZE}"
                     )
 
-            except Pyro5.errors.CommunicationError:
-                logger.warning(
-                    f"[{self._node_name}] não conseguiu contatar {peer_name} para votação"
-                )
-            except Exception as e:
-                logger.error(
-                    f"[{self._node_name}] erro ao solicitar voto de {peer_name}: {e}"
-                )
+            except grpc.RpcError:
+                logger.warning(f"[{self._node.node_name}] couldn't reach {peer_name} for vote")
 
         threads = []
-        for peer_name, peer_uri in NODE_URIS.items():
-            if peer_name == self._node_name:
+        for peer_name in PEER_ADDRESSES:
+            if peer_name == self._node.node_name:
                 continue
-            t = threading.Thread(
-                target=request_from,
-                args=(peer_name, peer_uri),
-                daemon=True,
-            )
+            t = threading.Thread(target=request_from, args=(peer_name,), daemon=True)
             t.start()
             threads.append(t)
 
@@ -99,43 +87,3 @@ class ElectionManager:
             t.join(timeout=3)
 
         return votes
-
-    def _detect_higher_term(self, peer_name: str, peer_term: int) -> bool:
-        """
-        Verifica se o peer respondeu com um termo maior.
-        Se sim, faz step-down imediato e retorna True.
-        """
-        with self._proxy.lock:
-            if peer_term > self._proxy.node.term:
-                self._proxy.node.become_follower(peer_term)
-                logger.warning(
-                    f"[{self._node_name}] peer {peer_name} tem termo maior "
-                    f"({peer_term}), abortando eleição"
-                )
-                return True
-        return False
-
-    def _conclude(self, votes: int, current_term: int) -> bool:
-        """Avalia o resultado e transiciona para líder ou permanece seguidor."""
-        with self._proxy.lock:
-            state_changed = (
-                self._proxy.node.state != NodeState.Candidate
-                or self._proxy.node.term != current_term
-            )
-            if state_changed:
-                logger.info(
-                    f"[{self._node_name}] eleição cancelada — estado mudou durante a votação"
-                )
-                return False
-
-            self._proxy.node.votes_received = votes
-
-            if votes >= _MAJORITY:
-                self._proxy.node.become_leader()
-                return True
-
-            logger.warning(
-                f"[{self._node_name}] eleição falhou | votos={votes}/{_TOTAL_NODES} "
-                f"(necessário {_MAJORITY}) | aguardando próximo timeout"
-            )
-            return False
