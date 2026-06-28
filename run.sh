@@ -5,14 +5,13 @@ GREEN='\033[0;32m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-# Limpa os containers ao pressionar CTRL+C
-trap 'echo -e "\n${RED}--- Encerrando cluster ---${NC}"; docker compose down' INT
+trap 'echo -e "\n${RED}--- Shutting down cluster ---${NC}"; docker compose down' INT
 
-echo -e "${GREEN}--- Limpando ambiente Docker ---${NC}"
+echo -e "${GREEN}--- Cleaning Docker environment ---${NC}"
 docker compose down --volumes --remove-orphans
 
-echo -e "${GREEN}--- Subindo containers (Clean Build) ---${NC}"
+echo -e "${GREEN}--- Building and starting containers ---${NC}"
 docker compose up --build -d
 
-echo -e "${GREEN}--- Exibindo Logs (CTRL+C para sair) ---${NC}"
+echo -e "${GREEN}--- Streaming logs (CTRL+C to stop) ---${NC}"
 docker compose logs -f

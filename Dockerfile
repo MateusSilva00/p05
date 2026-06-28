@@ -12,4 +12,4 @@ RUN uv sync --frozen
 
 COPY . .
 
-CMD ["uv", "run", "python", "-m","src.server.init_server"]
+CMD ["uv", "run", "python", "-m", "src.server.init_server"]

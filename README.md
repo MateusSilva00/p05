@@ -1,65 +1,62 @@
-# ⚔️ Coliseum — Consenso Raft com Pyro5
+# ⚔️ Coliseum — Raft Consensus with gRPC
 
-Implementação do algoritmo de consenso **Raft** para replicação de log entre **4 nós distribuídos**, utilizando **Pyro5** (Python Remote Objects) como mecanismo de comunicação remota. Projeto desenvolvido para a disciplina de Sistemas Distribuídos — UTFPR.
+Implementation of the **Raft** consensus algorithm for replicated log across **4 distributed nodes**, using **gRPC + Protocol Buffers** for communication and a **Go client** for interoperability.
 
-## 📐 Arquitetura
+## 📐 Architecture
 
-- **Nameserver Pyro5** — Serviço de nomes centralizado para descoberta de objetos remotos.
-- **4 Nós Raft** — Cada nó inicia como **Follower** e participa do protocolo de eleição de líder e replicação de log.
-- **Cliente** — Processo que consulta o líder via nameserver e envia comandos para replicação.
+- **4 Raft Nodes** (Python) — Each starts as Follower and participates in leader election and log replication via gRPC.
+- **Go Client** — REPL that discovers the leader through node responses and publishes/consumes data.
 
-## 🛠️ Tecnologias
+## 🛠️ Technologies
 
-- **Python 3.12**
-- **[Pyro5](https://pyro5.readthedocs.io/)** — Comunicação remota entre objetos Python
-- **[Pydantic](https://docs.pydantic.dev/)** — Modelagem e validação de dados
-- **[Loguru](https://loguru.readthedocs.io/)** — Logging estruturado
-- **[uv](https://docs.astral.sh/uv/)** — Gerenciador de pacotes e ambientes Python
-- **Docker / Docker Compose** — Orquestração dos containers
+- **Python 3.12** — Raft servers
+- **Go** — Client (demonstrating gRPC interoperability)
+- **gRPC + Protocol Buffers** — All communication
+- **Pydantic v2** — Domain models and validation
+- **Loguru** — Structured logging
+- **uv** — Python package manager
+- **Docker / Docker Compose** — Container orchestration
 
-## 🚀 Como Executar
+## 🚀 How to Run
 
-### Pré-requisitos
+### Prerequisites
 
-- [Docker](https://www.docker.com/) e [Docker Compose](https://docs.docker.com/compose/) instalados
-- Ou, para execução local: **Python 3.12+** e **[uv](https://docs.astral.sh/uv/)**
+- [Docker](https://www.docker.com/) and [Docker Compose](https://docs.docker.com/compose/)
 
----
-
-### Docker Compose
-
-**Linux / macOS:**
+### Start the cluster
 
 ```bash
-# Build + execução em um comando
 ./run.sh
 ```
 
-**Windows / Manual:**
+This starts:
+1. **4 Raft nodes** on internal port `50051` each
+2. **Go client** container (interactive)
 
-```bash
-# Limpar ambiente anterior
-docker compose down --volumes --remove-orphans
-
-# Build e execução dos containers
-docker compose up --build -d
-
-# Acompanhar logs em tempo real
-docker compose logs -f
-```
-
-Isso sobe automaticamente:
-1. O **nameserver** Pyro5 na porta `9090`
-2. Os **4 nós Raft** nas portas `9001`–`9004`
-
-Para parar o cluster:
-
-```bash
-docker compose down
-```
-
-Para iniciar o cliente:
+### Use the client
 
 ```bash
 docker attach client
+```
+
+Commands:
+- `publish <data>` — Write data to the cluster
+- `consume` — Read all committed data
+- `exit` — Quit
+
+### Demo scenarios
+
+```bash
+# Scenario 2 — Leader failure
+docker stop node_X    # (replace X with the leader)
+
+# Scenario 3/4 — Persistence and recovery
+docker stop node_X
+docker start node_X
+
+# Stop everything
+docker compose down
+
+# Stop and delete persisted data
+docker compose down --volumes
 ```
