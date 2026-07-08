@@ -50,7 +50,7 @@ class ElectionManager:
                 with grpc.insecure_channel(addr) as channel:
                     stub = raft_pb2_grpc.RaftServiceStub(channel)
                     response = stub.RequestVote(
-                        raft_pb2.VoteRequest(
+                        raft_pb2.VoteRequest(  # ignore=E501
                             term=term,
                             candidate_id=self._node.node_name,
                             last_log_index=last_log_index,
@@ -73,7 +73,9 @@ class ElectionManager:
                     )
 
             except grpc.RpcError:
-                logger.warning(f"[{self._node.node_name}] couldn't reach {peer_name} for vote")
+                logger.warning(
+                    f"[{self._node.node_name}] couldn't reach {peer_name} for vote"
+                )
 
         threads = []
         for peer_name in PEER_ADDRESSES:

@@ -36,7 +36,9 @@ class ReplicationManager:
         with self._node.lock:
             self._node.try_advance_commit()
 
-    def _send_to_peer(self, peer_name: str, leader_term: int, commit_index: int) -> None:
+    def _send_to_peer(
+        self, peer_name: str, leader_term: int, commit_index: int
+    ) -> None:
         with self._node.lock:
             if self._node.leader_state is None:
                 return
@@ -76,13 +78,23 @@ class ReplicationManager:
 
                 if response.success:
                     if entries:
-                        self._node.leader_state.next_index[peer_name] = entries[-1].index + 1
-                        self._node.leader_state.match_index[peer_name] = entries[-1].index
+                        self._node.leader_state.next_index[peer_name] = (
+                            entries[-1].index + 1
+                        )
+                        self._node.leader_state.match_index[peer_name] = entries[
+                            -1
+                        ].index
                 else:
                     if response.conflict_index > 0:
-                        self._node.leader_state.next_index[peer_name] = response.conflict_index
+                        self._node.leader_state.next_index[peer_name] = (
+                            response.conflict_index
+                        )
                     else:
-                        self._node.leader_state.next_index[peer_name] = max(1, next_idx - 1)
+                        self._node.leader_state.next_index[peer_name] = max(
+                            1, next_idx - 1
+                        )
 
         except grpc.RpcError:
-            logger.warning(f"[{self._node.node_name}] AppendEntries failed → {peer_name}")
+            logger.warning(
+                f"[{self._node.node_name}] AppendEntries failed → {peer_name}"
+            )

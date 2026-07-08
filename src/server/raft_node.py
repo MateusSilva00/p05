@@ -10,7 +10,6 @@ from src.core.models import (
     LeaderState,
     LogEntry,
     NodeRole,
-    PersistentState,
     VolatileState,
 )
 from src.core.persistence import StatePersistence
@@ -71,7 +70,9 @@ class RaftNode:
         self.leader_id = None
         self.reset_election_timeout()
         self._save()
-        logger.info(f"[{self.node_name}] → CANDIDATE | term={self.persistent.current_term}")
+        logger.info(
+            f"[{self.node_name}] → CANDIDATE | term={self.persistent.current_term}"
+        )
 
     def become_follower(self, new_term: int) -> None:
         self.role = NodeRole.FOLLOWER
@@ -93,9 +94,9 @@ class RaftNode:
         self.leader_state.initialize(peer_ids, self.persistent.last_log_index)
 
         self.reset_heartbeat_timeout()
-        logger.success(f"[{self.node_name}] → LEADER | term={self.persistent.current_term}")
-
-    # ── Vote logic (§5.2, §5.4.1) ──────────────────────────────────────
+        logger.success(
+            f"[{self.node_name}] → LEADER | term={self.persistent.current_term}"
+        )
 
     def handle_vote_request(
         self,
@@ -116,7 +117,6 @@ class RaftNode:
         ):
             return (self.persistent.current_term, False)
 
-        # Log up-to-date check (§5.4.1)
         my_last_term = self.persistent.last_log_term
         my_last_index = self.persistent.last_log_index
 
@@ -131,10 +131,10 @@ class RaftNode:
         self.persistent.voted_for = candidate_id
         self.reset_election_timeout()
         self._save()
-        logger.info(f"[{self.node_name}] voted for {candidate_id} | term={self.persistent.current_term}")
+        logger.info(
+            f"[{self.node_name}] voted for {candidate_id} | term={self.persistent.current_term}"
+        )
         return (self.persistent.current_term, True)
-
-    # ── AppendEntries logic (§5.3) ──────────────────────────────────────
 
     def handle_append_entries(
         self,
@@ -149,7 +149,10 @@ class RaftNode:
         if leader_term < self.persistent.current_term:
             return (self.persistent.current_term, False, 0)
 
-        if self.role != NodeRole.FOLLOWER or self.persistent.current_term != leader_term:
+        if (
+            self.role != NodeRole.FOLLOWER
+            or self.persistent.current_term != leader_term
+        ):
             self.become_follower(leader_term)
         else:
             self.reset_election_timeout()
@@ -159,7 +162,11 @@ class RaftNode:
         # Consistency check
         if prev_log_index > 0:
             if prev_log_index > len(self.persistent.log):
-                return (self.persistent.current_term, False, len(self.persistent.log) + 1)
+                return (
+                    self.persistent.current_term,
+                    False,
+                    len(self.persistent.log) + 1,
+                )
 
             existing = self.persistent.log[prev_log_index - 1]
             if existing.term != prev_log_term:
@@ -178,14 +185,18 @@ class RaftNode:
             insert_from = prev_log_index
             self.persistent.log = self.persistent.log[:insert_from] + entries
             self._save()
-            logger.info(f"[{self.node_name}] replicated {len(entries)} entries from {leader_id}")
+            logger.info(
+                f"[{self.node_name}] replicated {len(entries)} entries from {leader_id}"
+            )
 
         # Update commit index
         if leader_commit > self.volatile.commit_index:
             old = self.volatile.commit_index
             self.volatile.commit_index = min(leader_commit, len(self.persistent.log))
             if self.volatile.commit_index > old:
-                logger.success(f"[{self.node_name}] commit_index {old} → {self.volatile.commit_index}")
+                logger.success(
+                    f"[{self.node_name}] commit_index {old} → {self.volatile.commit_index}"
+                )
 
         return (self.persistent.current_term, True, 0)
 
