@@ -7,7 +7,7 @@ services:
       - NODE_NAME=node_1
       - RAFT_DATA_DIR=/app/data
     volumes:
-      - node_1_data:/app/data
+      - ./data/node_1:/app/data
     networks:
       - raft-net
 
@@ -19,7 +19,7 @@ services:
       - NODE_NAME=node_2
       - RAFT_DATA_DIR=/app/data
     volumes:
-      - node_2_data:/app/data
+      - ./data/node_2:/app/data
     networks:
       - raft-net
 
@@ -31,7 +31,7 @@ services:
       - NODE_NAME=node_3
       - RAFT_DATA_DIR=/app/data
     volumes:
-      - node_3_data:/app/data
+      - ./data/node_3:/app/data
     networks:
       - raft-net
 
@@ -43,7 +43,7 @@ services:
       - NODE_NAME=node_4
       - RAFT_DATA_DIR=/app/data
     volumes:
-      - node_4_data:/app/data
+      - ./data/node_4:/app/data
     networks:
       - raft-net
 
@@ -61,12 +61,6 @@ services:
       - raft-net
     stdin_open: true
     tty: true
-
-volumes:
-  node_1_data:
-  node_2_data:
-  node_3_data:
-  node_4_data:
 
 networks:
   raft-net:
